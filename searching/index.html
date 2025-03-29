@@ -87,12 +87,40 @@
             }
         }, 5 * 60 * 1000)
 
+        // TODO: When we kick the old host for being host for too long and when we refresh b/c the host left
+        //     lets not just refresh but instead add a url param saying that we wanted to be automatically be
+        //     put back in queue. So don't need to keep clicking the button if the server host keeps leaving (probably by finding a pair)
+
         var peer
         var connection
         var allConnections = []
         var amIHost = false
         var availableServers = {}
         
+        // TODO: Make this setInterval check all people searching for a partner and find a random one.
+        // Then we can send a requesting packet to the main host (or just the person to pair to if we're the host)
+        // The person we requested to can then accept or deny this
+        //     Deny: We start looking for people again
+        //     Accept (for both parties): We remove ourselves from the availableServers
+        //         and then go to the actual page for coding, with a URL param of the other person's UUID & our own
+        //         there we'll start a peer.js w/ our UUID and try to connect to the other's UUID, and the rest is handled on the other page
+        setInterval(()=>{
+            uuidsToCheck = Object.keys(availableServers)
+            searchingUUIDs = [] // UUIDs of people that are also searching
+
+            for(let i=0; i<uuidsToCheck.length; i++){
+                checkingUUID = uuidsToCheck[i]
+                // "true" means that the other person is also searching
+                if(availableServers[checkingUUID] == true){
+                    searchingUUIDs.push(checkingUUID)
+                }
+            }
+
+            uuidToTryAndPair = searchingUUIDs[randomNumberInclusiveInclusive(0, searchingUUIDs.length-1)]
+
+            // do sending the request packet
+        }, 1000)
+
         function handlePacket(packetData){
             var packetType = packetData["Type"]
             switch (packetType) {
