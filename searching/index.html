@@ -87,7 +87,7 @@
             }
         }, 5 * 60 * 1000)
 
-        // TODO: When we kick the old host for being host for too long and when we refresh b/c the host left
+        // TODO: When we kick the old host for being host for too long and when we refresh b/c the host left ^^^^
         //     lets not just refresh but instead add a url param saying that we wanted to be automatically be
         //     put back in queue. So don't need to keep clicking the button if the server host keeps leaving (probably by finding a pair)
 
@@ -97,31 +97,78 @@
         var amIHost = false
         var availableServers = {}
         
-        // TODO: Make this setInterval check all people searching for a partner and find a random one.
+        // TODO: Make this check all people searching for a partner and find a random one.
         // Then we can send a requesting packet to the main host (or just the person to pair to if we're the host)
         // The person we requested to can then accept or deny this
         //     Deny: We start looking for people again
         //     Accept (for both parties): We remove ourselves from the availableServers
         //         and then go to the actual page for coding, with a URL param of the other person's UUID & our own
         //         there we'll start a peer.js w/ our UUID and try to connect to the other's UUID, and the rest is handled on the other page
-        setInterval(()=>{
+        var searchForOtherPersonCooldownBase = 1000
+        function searchForOtherPerson(){
+            // only do all of this if we are actively searching.
+            if (availableServers[myUUID] == false) { return }
+
             uuidsToCheck = Object.keys(availableServers)
+            // I don't exist in the availableServers. This can only mean that I've never clicked the button, meaning I am not searching
+            if (uuidsToCheck.includes(myUUID) == false) { return }
+
             searchingUUIDs = [] // UUIDs of people that are also searching
 
-            for(let i=0; i<uuidsToCheck.length; i++){
+            for (let i = 0; i < uuidsToCheck.length; i++) {
                 checkingUUID = uuidsToCheck[i]
+                // We cannot pair w/ ourselves, so skip us
+                if (checkingUUID == myUUID) { continue }
                 // "true" means that the other person is also searching
-                if(availableServers[checkingUUID] == true){
+                if (availableServers[checkingUUID] == true) {
                     searchingUUIDs.push(checkingUUID)
                 }
             }
 
-            uuidToTryAndPair = searchingUUIDs[randomNumberInclusiveInclusive(0, searchingUUIDs.length-1)]
+            uuidToTryAndPair = searchingUUIDs[randomNumberInclusiveInclusive(0, searchingUUIDs.length - 1)]
 
+            console.log(uuidToTryAndPair)
             // do sending the request packet
-        }, 1000)
 
-        function handlePacket(packetData){
+            // vary the time so not everyone tries to search at the same instant, letting connections be easier in theory
+        }
+        function searchForOtherPersonHandler(){
+            searchForOtherPerson()
+            setTimeout(searchForOtherPersonHandler, searchForOtherPersonCooldownBase + randomNumberInclusiveInclusive(0, 2000))
+        }
+        searchForOtherPersonHandler()
+
+        function handlePacket(packetData, sendingConnection){
+            console.log("Data received: ")
+            console.log(packetData)
+
+            // Check if the packets are good, but only if we're host b/c we'll just accept all the host's packets as truth
+            if(amIHost){
+                if(packetData["UUID"] != sendingConnection.peer){
+                    // this packet is not good. There is a mismatch between the packet's claimed sender, and it's real sender
+                    // lets reject this by doing nothing and ending the function here
+                    return
+                }
+            }
+
+            // TODO: Make a dictionary w/ the keys being packet types, then the value will be json
+            //      saying wether if a packet should be verified, and if it should be forwarded to everyone.
+
+            if(amIHost){
+                if (data["Type"] == "SearchingStatusUpdate") {
+                    if (data["UUID"] != connection.peer) {
+                        console.log("Something fishy is going on here... Looks like they're updating their status. but the sender is not who they claim to be?")
+                        // Something fishy is going on here... Looks like they're updating their status
+                        //     but the sender is not who they claim to be?
+                        // TODO: Add a possible punishment for this? We don't have to since it won't have an effect
+                    }
+                    else {
+                        sendAllConnections(data)
+                    }
+                }
+            }
+
+
             var packetType = packetData["Type"]
             switch (packetType) {
                 case "SearchingStatusUpdate":
@@ -130,6 +177,12 @@
                     availableServers[whoIsBeingUpdated] = isSearching
                     break
                 case "AllAvailablePeople":
+                    if(amIHost){
+                        // Why are we receiving this? We're the host, the only person that should send this.
+                        // I think something malicious is happening?
+                        console.log("Why are we receiving an \"AllAvailablePeople\" packet? We're the host, the only person that should send this. I think something malicious is happening?")
+                        break
+                    }
                     availableServers = packetData["AvailablePeople"]
                     break
                 default:
@@ -148,12 +201,22 @@
             }
         }
 
+        function sendAllAvailablePeoplePacket(){
+            if (amIHost) {
+                sendAllConnections({
+                    "Type": "AllAvailablePeople",
+                    "AvailablePeople": availableServers,
+                    "UUID": myUUID
+                })
+            }
+        }
+
         async function main(){
             var isIdTaken = await isPeerIdTaken(searchingForPeerServerCode)
-            var myId = isIdTaken ? "" : searchingForPeerServerCode
+            var myId = isIdTaken ? myUUID : searchingForPeerServerCode
             // it's possible that if two people join when no one is the host then they'll both see that there is no server
             // so they'll both try and become it. Luckily only one can, so the other one will error out and refresh the page.
-            // TODO ^^^
+            // Also we'll use the UUID as their ID to solve some issues like verifying packets
 
             peer = new Peer(myId);
             connection = null
@@ -183,32 +246,11 @@
             function establishConnection(connection) {
                 allConnections.push(connection)
                 connection.on("open", () => {
-                    connection.on("data", (data) => {
-                        console.log("Data received: ")
-                        console.log(data)
-                        
-                        handlePacket(data)
-                        
-                        // TODO: Make an array of all packet types that need to be resent to everyone by the host
-                        // and then check it here instead of doing them individually
-
-                        if(data["Type"] == "SearchingStatusUpdate" && amIHost){
-                            sendAllConnections(data)
-                        }
+                    connection.on("data", (data)=>{
+                        handlePacket(data, connection)
                     })
 
                     searchStateChange = (isSearching)=>{
-                        // TODO: Do some verification for this packet. Right now anyone can form a packet like this
-                        // and then send it with anyone's UUID. For example someone can scrape everyone's UUID and
-                        // then send a few packets saying that they're no-longer searching
-
-                        // Solutions?
-                        // Add the connection ID into the UUID?
-                        // Check if one connection ID or connection (user) is sending a packet w/
-                        //      different UUIDs. If so kick them?
-                        // We can have on init connection them share their IP and store that on the central server
-                        //      and then whenever someone sends this packet w/ their IP we can check if it is the same
-                        //      If so allow it and pass it on (removing their IP in the packet between) and if not don't pass it forward
                         sendAllConnections({
                             "Type": "SearchingStatusUpdate",
                             "IsSearching": isSearching,
@@ -219,24 +261,18 @@
                         availableServers[myUUID] = isSearching
                     }
 
-                    if(amIHost){
-                        sendAllConnections({
-                            "Type": "AllAvailablePeople",
-                            "AvailablePeople": availableServers
-                        })
-                    }
+                    sendAllAvailablePeoplePacket()
                     //connection.send("Hello world! " + peer.id)
                 })
 
                 connection.on("close", ()=>{
-                    // TODO VVV
-                    // As the host we need to make sure that we don't have their UUID still in queue
-                    // We could solve this w/ a previously mentioned list of UUID, IPs, and connection IDs and when
-                    //     someone disconnects we can check their connection ID to get their UUID and set their
-                    //     to false, sending another packet w/ that, or remove them and resend an "AllAvailablePeople" packet
+                    console.log(`Connection closed : ${connection.peer}`)
+                    delete availableServers[connection.peer]
+                    sendAllAvailablePeoplePacket()
 
-                    console.log("Connection closed")
-                    if(peer.id != searchingForPeerServerCode){
+                    //if(peer.id != searchingForPeerServerCode){
+                    // this new if statement seems like a better way to check if someone needs to claim the host
+                    if(amIHost == false){
                         // Seems like the searching server was either closed or kicked us.
                         // We are going to reload the page to reconnect and/or claim to be the host of the server
                         reloadPage()
